@@ -1,0 +1,544 @@
+---
+title: "Mother to Child Transmission of HIV among infants enrolled for early infant diagnosis before and after the COVID-19 pandemic in Kampala, Uganda: A competing events survival analysis"
+author: "Benson Akatukwasa | Master of Biostatistics |  Makerere University School of Public Health"
+date: '2022-07-16'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##### 1. Importing the EID Dataset as EID_Dataset, specifying the datatypes
+
+
+```{r importing, message=FALSE, warning=FALSE}
+library(readxl)
+EID_Dataset <- read_excel("EID Dataset.xlsx", 
+                          col_types = c("text", "text", "text", 
+                                        "text", "text", "numeric", "text", 
+                                        "text", "numeric", "text", "numeric", 
+                                        "text", "text", "text", "text", "text", 
+                                        "text", "numeric", "text", "text", 
+                                        "text", "numeric", "text", "text", 
+                                        "text", "numeric", "text", "numeric", 
+                                        "text", "numeric", "text", "text", 
+                                        "text", "numeric", "text"))
+
+```
+
+##### 2. View the imported EID_Dataset
+
+
+```{r View Dataset}
+head(EID_Dataset)
+```
+
+##### 3. View Column heads of the dataset
+```{r }
+
+colnames(EID_Dataset)
+```
+##### 4. Subset the dataset to keep fewer/important variables
+```{r}
+EID_Data<-EID_Dataset[,c(
+  "Cohort","Infant_No","Sex","Age_in_months","Clinic_referred_from","Age_NVP_initiation",
+  "Age_at_cotrim","HIV_B_feeding","ART_B_feeding","ARVs_EMTCT","Infant_ARVs_EMTCT","B_feeding_1st_DBS",
+  "Number_of_visits","Age_at_visit","Age_last_visit","feeding_at_visit", "Wasting_2",
+  "final_outcome"
+)]
+```
+
+### Note: 
+
+We need to prepare the dataset to a structure suitable for the Survtmle package
+The simple data structure should contain:
+  (i) A set of baseline covariates (adjustVars), 
+  (ii) A binary treatment variable (trt), 
+  (iii) A failure time that is a function of the treatment,adjustment variables, and a random error (ftime), 
+  (iv) and a failure type (ftype), which denotes the cause of failure (0 means no failure, 1 means failure)
+  
+##### 5.  Calculate follow up time from age (in months) at registration and age at last visit(t)
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+
+Age_last<-transmute(EID_Data,Age_last=as.integer(Age_last_visit))
+Age_first<-transmute(EID_Data,Age_first=as.integer(Age_in_months))
+age_diff<-cbind(Age_last,Age_first)
+time<-transmute(age_diff,ftime=Age_last-Age_first)
+EID_Data<-cbind(EID_Data,time)
+```
+##### 6.  View the new EID_Data Dataset
+
+```{r paged.print=TRUE}
+head(EID_Data)
+```
+
+##### 7. Renaming and Re-coding the  Cohort and final_outcome Variables to:
+(a) Cohort to trt: a binary treatment variable.i.e "0" - Unexposed/Before COVID-19 , "1" - Exposed/COVID-19 Pandemic
+(b) final_outcome to ftype: which denotes the cause of failure ("0" means no failure, "1" means failure type 1/HIV Infection, "2" means failure type 2/ Infant Mortality)
+
+##### 8. Rename  Cohort to trt, final_outcome to ftype
+
+```{r}
+EID_Data<-EID_Data %>% rename(
+  trt = Cohort, ftype = final_outcome
+)
+```
+
+##### 9. View the data structure
+
+```{r}
+str(EID_Data)
+```
+
+
+##### 10. Re-code trt, ftype and Clinic_referred_from variables
+
+```{r}
+
+library(Hmisc)
+
+EID_Data$trt<-recode(EID_Data$trt, After = "1", Before = "0")
+
+EID_Data$ftype<-recode(EID_Data$ftype,
+                       "1"="0", "2" = "1", "3" = "0", "4" = "2", "5" = "2","6" = "0" )
+describe(EID_Data$Clinic_referred_from)
+
+EID_Data$Clinic_referred_from<-recode(EID_Data$Clinic_referred_from,
+                                      "1"="0","2"="1","3"="1","4"="1","5"="1","6"="1")
+
+```
+
+##### 11 . Descriptive stats of the ftype variable
+
+```{r message=FALSE, warning=FALSE}
+
+describe(EID_Data$ftype)
+
+EID_Data0<-EID_Data%>%filter(trt==0)
+
+describe(EID_Data0$ftype)
+
+EID_Data1<-EID_Data%>%filter(trt==1)
+
+describe(EID_Data1$ftype)
+```
+
+##### 12.Data exploration/Descriptive statistics
+```{r}
+library(ggplot2)
+```
+
+
+##### 12a.  Average Number of Visits by Cohort
+```{r}
+EID_Data%>%group_by(trt)%>%summarise(mean_visits=mean(Number_of_visits),
+                                     sd_visits=sd(Number_of_visits),
+                                     median_visits=median(Number_of_visits),
+                                     iqr_visits=IQR(Number_of_visits))
+
+EID_Data%>%group_by(trt)%>%summarise(mean_visits=mean(Number_of_visits))%>%
+ggplot(
+ aes(x = trt, y = mean_visits,fill=trt) ) +
+  geom_bar(stat = "identity") +
+  theme_classic() +
+  labs(
+    x = "Cohort",
+    y = "Average No. of Visits",
+    title = paste(
+      "Average Number of Visits by Cohort"
+    )
+  )+scale_fill_discrete(name = "Cohort", labels = c("0 = Before COVID-19", "1 = After COVID-19"))
+
+```
+
+
+
+##### 12b. Average Age at registration by Cohort
+
+```{r}
+
+EID_Data%>%group_by(trt)%>%summarise(mean_age=mean(Age_in_months,na.rm=T),
+                                     sd_age=sd(Age_in_months,na.rm=T),
+                                     median_age=median(Age_in_months,na.rm=T),
+                                     iqr_age=IQR(Age_in_months,na.rm=T))
+
+EID_Data%>%group_by(trt)%>%summarise(mean_age=mean(Age_in_months,na.rm=T))%>%
+  ggplot(
+    aes(x = trt, y = mean_age,fill=trt )) +
+  geom_bar(stat = "identity") +
+  theme_classic() +
+  labs(
+    x = "Cohort",
+    y = "Average Age at registration",
+    title = paste(
+      "Average Age at registration by Cohort"
+    )
+  )+scale_fill_discrete(name = "Cohort", labels = c("0 = Before COVID-19", "1 = After COVID-19"))
+```
+
+
+
+#12c. Infant feeding practice by age at the last visit for the Cohort before COVID-19
+
+```{r}
+EID_Data%>%filter(trt==0)%>%filter(!is.na(feeding_at_visit))%>%group_by(feeding_at_visit)%>%summarise(mean_age=mean(Age_last_visit,na.rm=T))
+```
+
+
+```{r}
+
+EID_Data%>%filter(trt==0)%>%filter(!is.na(feeding_at_visit))%>%group_by(feeding_at_visit)%>%summarise(mean_age=mean(Age_last_visit,na.rm=T))%>%
+  ggplot(
+    aes(x = feeding_at_visit, y = mean_age,fill=feeding_at_visit )) +
+  geom_bar(stat = "identity") +
+  theme_classic() +
+  labs(
+    x = "Feeding Practice",
+    y = "Average Age at last Visit",
+    title = paste(
+      "Infant feeding practice by age at the last visit"
+    )
+  ) + scale_fill_discrete(name = "Feeding Practice", labels = c("1 = Exclusive Breastfeeding", 
+                                                                "2 = Replacement Feeding (never breastfed)", 
+                                                                "3 = Mixed Feeding (<6months)", 
+                                                                "4 = Complementary Feeding (>6months)",
+                                                                "5 = Weaning", "6 = No Longer Breastfeeding"))
+
+
+```
+
+
+##### 12d. Infant feeding practice by age at the last visit for the Cohort after COVID-19
+```{r}
+
+EID_Data%>%filter(trt==1)%>%filter(!is.na(feeding_at_visit))%>%group_by(feeding_at_visit)%>%summarise(mean_age=mean(Age_last_visit,na.rm=T))
+```
+
+
+```{r}
+
+
+EID_Data%>%filter(trt==1)%>%filter(!is.na(feeding_at_visit))%>%group_by(feeding_at_visit)%>%summarise(mean_age=mean(Age_last_visit,na.rm=T))%>%
+  ggplot(
+    aes(x = feeding_at_visit, y = mean_age,fill=feeding_at_visit )) +
+  geom_bar(stat = "identity") +
+  theme_classic() +
+  labs(
+    x = "Feeding Practice",
+    y = "Average Age at last Visit",
+    title = paste(
+      "Infant feeding practice by age at the last visit"
+    )
+  ) + scale_fill_discrete(name = "Feeding Practice", labels = c("1 = Exclusive Breastfeeding", 
+                                                                "2 = Replacement Feeding (never breastfed)", 
+                                                                "3 = Mixed Feeding (<6months)", 
+                                                                "4 = Complementary Feeding (>6months)",
+                                                                "5 = Weaning", "6 = No Longer Breastfeeding"))
+
+
+
+```
+
+
+##### 12e. Average Age at NVP Initiation by Cohort
+
+```{r}
+EID_Data%>%group_by(trt)%>%summarise(mean_age=mean(Age_NVP_initiation,na.rm=T))
+
+EID_Data%>%group_by(trt)%>%summarise(mean_age=mean(Age_NVP_initiation,na.rm=T))%>%
+  ggplot(
+    aes(x = trt, y = mean_age,fill=trt )) +
+  geom_bar(stat = "identity") +
+  theme_classic() +
+  labs(
+    x = "Cohort",
+    y = "Average Age at NVP Initiation",
+    title = paste(
+      "Average Age at NVP initiation by Cohort"
+    )
+  )+scale_fill_discrete(name = "Cohort", labels = c("0 = Before COVID-19", "1 = After COVID-19"))
+
+```
+
+
+##### 12f. Average Age at Cotrimoxazole Initiation by Cohort
+
+```{r}
+
+EID_Data%>%group_by(trt)%>%summarise(mean_age=mean(Age_at_cotrim,na.rm=T))
+
+EID_Data%>%group_by(trt)%>%summarise(mean_age=mean(Age_at_cotrim,na.rm=T))%>%
+  ggplot(
+    aes(x = trt, y = mean_age,fill=trt )) +
+  geom_bar(stat = "identity") +
+  theme_classic() +
+  labs(
+    x = "Cohort",
+    y = "Average Age at Cotrimoxazole Initiation",
+    title = paste(
+      "Average Age at Cotrimoxazole initiation by Cohort"
+    )
+  )+scale_fill_discrete(name = "Cohort", labels = c("0 = Before COVID-19", "1 = After COVID-19"))
+
+```
+
+##### 13. Targeted Learning for Survival Analysis with Competing Risks
+
+```{r}
+library(survtmle)
+```
+
+It is important to note that the current "survtmle" distribution only supports integer-valued failure times. We shall convert the "ftype" and "trt" variables to integers prior to applying the "survtmle" function.
+
+
+```{r}
+EID_Data$ftype<-as.integer(EID_Data$ftype)
+EID_Data$trt<-as.integer(EID_Data$trt)
+```
+
+```{r}
+EID_Data$ftime<-EID_Data$ftime
+```
+
+Some failure times are less than or equal zero. We need remove these observations otherwise the function will return an error. Let's eliminate zero failure times by adding 1 to the "ftime" variable
+
+
+```{r}
+EID_Data$ftime<-EID_Data$ftime+1
+```
+
+
+##### 13(a)  iterated mean-based TMLE
+
+A common goal is to compare the incidence of failure at a fixed time between the two treatment groups. Covariate adjustment is often desirable in this comparison to improve efficiency.This covariate adjustment may be facilitated by estimating a series of iterated covariate-conditional means.The final iterated covariate-conditional mean is marginalized over the empirical distribution of baseline covariates,to obtain an estimate of the marginal cumulative incidence.Here, we invoke the eponymous survtmle function to compute the iterated mean-based (method = "mean") covariate-adjusted estimates of the cumulative incidence at time six (t0 = 6) in each of the treatment groups using quasi-logistic regression (formula specified via glm.ftime) to estimate the iterated means. The glm.ftime argument should be a valid right-hand-side formula specification based on colnames(adjustVars) and "trt". Here we use a simple main terms regression.
+
+
+##### fit0a: No covariate adjustment for treatment and censoring probabilities
+
+```{r}
+fit0a <- survtmle(ftime = EID_Data$ftime, ftype = EID_Data$ftype,
+                 trt = EID_Data$trt, adjustVars = EID_Data[c("Sex","Clinic_referred_from")],
+                 glm.ftime = "trt + Sex + Clinic_referred_from",
+                 method = "mean", t0 = 1)
+fit0a
+```
+
+
+
+Internally, survtmle estimates the covariate-conditional treatment probability (via glm.trt or SL.trt) and covariate-conditional censoring distribution (via glm.ctime or SL.ctime,). In the above (fit0), the treatment probability does not depend on covariates and so we did not specify a way to adjust for covariates in estimating the treatment probability.In this case, survtmle sets glm.trt = "1", which corresponds with empirical estimates of treatment probability,and sets glm.ctime to be equivalent to the Kaplan-Meier censoring distribution estimates.
+
+
+In practice, we may wish to adjust for covariates when computing estimates of the covariate-conditional treatment and censoring probabilities. In observational studies,the distribution of treatment may differ by measured covariates,while in almost any study (including randomized trials) it is possible that censoring differs by covariates. Thus, we often wish to adjust for covariates to account for measured confounders of treatment receipt and censoring. This adjustment may be accomplished using logistic regression through the "glm.trt" and "glm.ctime" arguments, respectively.The "glm.trt" argument should be a valid right-hand-side formula specification based on colnames(adjustVars).The "glm.ctime" argument should be a valid right-hand-side formula specification based on colnames(adjustVars), "trt", and "t" used to model the hazard function for censoring. By including "trt" and "t",  the function allows censoring probabilities to depend on treatment assignment and time, respectively.
+
+
+
+##### fit0b: No Covariate adjustment for treatment probability, Covariate adjusted censoring probability
+
+
+### Note: 
+
+Since it is not logical to assume that HIV Exposed infants belong to either the pre-COVID 19 or post-COVID-19 group by chance, we take the probability of treatment/exposure to the COVID-19 pandemic to be 1. However, the censoring probability could be confounded by covariates. In the fit below (fit0b), we eliminate "glm.trt" and include "glm.ctime
+
+```{r}
+fit0b <- survtmle(ftime = EID_Data$ftime, ftype = EID_Data$ftype,
+                 trt = EID_Data$trt, adjustVars = EID_Data[c("Sex","Clinic_referred_from")],
+                 glm.ftime = "trt + Sex + Clinic_referred_from",
+                 glm.ctime = "trt + Sex + Clinic_referred_from",
+                 method = "mean", t0 = 1)
+fit0b
+```
+
+
+
+##### Fit 1: GLM estimators for treatment, censoring, and failure w/ "mean" method
+
+```{r}
+fit1 <- survtmle(ftime = EID_Data$ftime, ftype = EID_Data$ftype,
+                 trt = EID_Data$trt, adjustVars = EID_Data[c("Sex","Clinic_referred_from")],
+                 glm.trt = "Sex + Clinic_referred_from",
+                 glm.ftime = "trt + Sex + Clinic_referred_from",
+                 glm.ctime = "trt + Sex + Clinic_referred_from",
+                 method = "mean", t0 = 1)
+fit1
+```
+
+
+##### 13(b): Estimation in bounded models
+
+In certain situations, we have knowledge that the incidence of an event is bounded below/above for every strata in the population. It is possible to incorporate these bounds into the TMLE estimation procedure to ensure that any resulting estimate of cumulative incidence is compatible with these bounds
+
+Bounds can be passed to survtmle by creating a "data.frame" that contains columns with specific names. 
+In particular, there should be:
+(i) A column named "t", 
+(ii) There should additionally be columns for the lower and upper bound for each type of failure,
+ 
+
+For example if there is only one type of failure (ftype = 1 or ftype = 0) then the bounds data.frame can contain columns "l1", and "u1" denote the lower and upper bounds, respectively, on the iterated conditional mean (for method = "mean") or the conditional hazard function (for method = "hazard"). If there are two types of failure (ftype = 1, ftype = 2, or ftype = 0) then there can additionally be columns "l2" and "u2" denoting the lower and upper bounds, respectively, on the iterated conditional mean for type two failures (for method = "mean") or the conditional cause-specific hazard function for type two failures (for method = "hazard").
+
+
+##### 13(c): Constructing a bounds dataframe, bf2
+
+
+Bounds lower bound for outcome 1 (l1),upper bound for outcome 1 (u1)
+lower bound for outcome 2 (l2),upper bound for outcome 2 (u2)
+t = seq_len(t_0)
+
+### Note: 
+
+For the observation period, in the study population:
+
+(i) The highest monthly rate of HIV infection = 0.06, and lowest = 0.00;
+(ii) The highest monthly rate of infant mortality = 0.08, and lowest = 0.00;
+l1 = rep(0.00, t_0), u1 = rep(0.06, t_0);
+l2 = rep(0.00, t_0), u2 = rep(0.08, t_0)
+
+```{r}
+bf2 <- data.frame(t = seq_len(1),
+                  l1 = rep(0.00, 1), u1 = rep(0.06, 1),
+                  l2 = rep(0.00, 1), u2 = rep(0.08, 1)
+)
+
+bf2
+```
+
+
+# 13(d) Fit2a: same as Fit0a above, but now include bounds
+
+
+```{r}
+library(Rcpp)
+
+fit2a <- survtmle(ftime = EID_Data$ftime, ftype = EID_Data$ftype,
+                 trt = EID_Data$trt, adjustVars = EID_Data[c("Sex","Clinic_referred_from")],
+                 glm.ftime = "trt + Sex + Clinic_referred_from",
+                 method = "mean", t0 = 1,
+                 bounds = bf2)
+fit2a
+```
+
+
+##### 13(e) Fit2b: same as Fit0b above, but now include bounds
+
+```{r}
+fit2b <- survtmle(ftime = EID_Data$ftime, ftype = EID_Data$ftype,
+                 trt = EID_Data$trt, adjustVars = EID_Data[c("Sex","Clinic_referred_from")],
+                 glm.ftime = "trt + Sex + Clinic_referred_from",
+                 glm.ctime = "trt + Sex + Clinic_referred_from",
+                 method = "mean", t0 = 1,
+                 bounds = bf2)
+fit2b
+```
+
+
+
+##### 14 Utility functions: Estimating cumulative incidence curves
+
+Refit Fit0b, setting returnModels=TRUE this time...
+
+```{r}
+fit0b_rm <- survtmle(ftime = EID_Data$ftime, ftype = EID_Data$ftype,
+                  trt = EID_Data$trt, adjustVars = EID_Data[c("Sex","Clinic_referred_from")],
+                  glm.ftime = "trt + Sex + Clinic_referred_from",
+                  glm.ctime = "trt + Sex + Clinic_referred_from",
+                  method = "mean", t0 = 1,
+                  returnModels = TRUE)
+fit0b_rm
+```
+
+
+
+
+##### 14(b): call timepoints based on this fit
+
+The survtmle function provides the function timepoints to compute the estimated cumulative incidence over multiple timepoints. This function is invoked after an initial call to survtmle with option returnModels = TRUE. By setting this option, the timepoints function is able to recycle fits for the conditional treatment probability, censoring distribution, and, in the case of method = "hazard", the hazard fits. Thus, invoking timepoints is faster than making repeated calls to survtmle with different t0.Now we can call timepoints to return estimates of cumulative incidence at each time "seq_len(t_0)".
+
+```{r message=FALSE, warning=FALSE}
+tp.fit0b <- timepoints(fit0b_rm, times = seq_len(19))  # t_0 = 18
+
+# print the object
+tp.fit0b
+```
+
+##### Confidence intervals
+
+```{r}
+
+
+ci<-confint(tp.fit0b)
+ci
+```
+
+##### 14(c): plot raw cumulative incidence
+
+```{r}
+plot(tp.fit0b, type = "raw")
+```
+
+##### 14(d): plot smoothed cumulative incidence
+
+Because the cumulative incidence function is being invoked pointwise, it is possible that the resulting curve is not monotone. However, it is possible to show that projecting this curve onto a monotone function via isotonic regression results in an estimate with identical asymptotic properties to the pointwise estimate. Therefore, we additionally provide an option type = "iso" (the default) that provides these smoothed curves.
+
+```{r}
+plot(tp.fit0b)
+```
+
+
+##### 15 Cumulative incidence curves in the presence of bounds: Redo 10-10(d) using fit2a
+
+##### 15(a): Refit Fit2a, setting returnModels=TRUE
+
+```{r}
+fit2a_rm <- survtmle(ftime = EID_Data$ftime, ftype = EID_Data$ftype,
+                  trt = EID_Data$trt, adjustVars = EID_Data[c("Sex","Clinic_referred_from")],
+                  glm.ftime = "trt + Sex + Clinic_referred_from",
+                  method = "mean", t0 = 1,
+                  bounds = bf2,
+                  returnModels = TRUE)
+fit2a_rm
+```
+
+
+```{r message=FALSE, warning=FALSE}
+
+tp.fit2a <- timepoints(fit2a_rm, times = seq_len(19))  # t_0 = 19
+
+# print the object
+tp.fit2a
+```
+
+
+
+##### 15(b): plot raw & smoothed cumulative incidence curves
+
+```{r}
+plot(tp.fit2a, type = "raw")
+```
+
+```{r}
+# Confidence intervals
+
+ci<-confint(tp.fit2a)
+```
+
+```{r}
+fit0bx <- survtmle(ftime = EID_Data$ftime, ftype = EID_Data$ftype,
+                  trt = EID_Data$trt, adjustVars = EID_Data[c("Sex","Clinic_referred_from","Age_in_months")],
+                  glm.ftime = "trt + Clinic_referred_from + Age_in_months + Sex",
+                  glm.ctime = "trt + Clinic_referred_from + Age_in_months + Sex",
+                  method = "mean", t0 = 1)
+fit0bx
+```
+
+
+
+
+
+
+
+
+
+
+
